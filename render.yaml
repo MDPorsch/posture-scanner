@@ -1,0 +1,105 @@
+# Render infrastructure definition.
+# One database, one Redis, two web services (staging + prod), two workers.
+# After connecting this repo in the Render dashboard, all services are
+# provisioned automatically.
+
+databases:
+  - name: posture-scanner-db
+    databaseName: posture_scanner
+    plan: free
+
+services:
+  - type: redis
+    name: posture-scanner-redis
+    plan: free
+    ipAllowList: []
+
+  # ── PRODUCTION web service ──────────────────────────────────
+  - type: web
+    name: posture-scanner-api-prod
+    runtime: python
+    buildCommand: >
+      pip install -r backend/requirements.txt &&
+      python backend/manage.py collectstatic --noinput &&
+      python backend/manage.py migrate
+    startCommand: gunicorn scanner.wsgi --chdir backend
+    branch: main
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: posture-scanner-db, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: posture-scanner-redis, type: redis, property: connectionString }
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DJANGO_SETTINGS_MODULE
+        value: scanner.settings.prod
+      - key: ENVIRONMENT
+        value: production
+      - key: SENTRY_DSN
+        sync: false   # set manually in the Render dashboard
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false   # set to your Vercel prod URL
+
+  # ── PRODUCTION Celery worker ────────────────────────────────
+  - type: worker
+    name: posture-scanner-worker-prod
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: celery -A scanner worker --beat --loglevel=info --chdir backend
+    branch: main
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: posture-scanner-db, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: posture-scanner-redis, type: redis, property: connectionString }
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DJANGO_SETTINGS_MODULE
+        value: scanner.settings.prod
+      - key: SENTRY_DSN
+        sync: false
+
+  # ── STAGING web service ─────────────────────────────────────
+  - type: web
+    name: posture-scanner-api-staging
+    runtime: python
+    buildCommand: >
+      pip install -r backend/requirements.txt &&
+      python backend/manage.py collectstatic --noinput &&
+      python backend/manage.py migrate
+    startCommand: gunicorn scanner.wsgi --chdir backend
+    branch: staging
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: posture-scanner-db, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: posture-scanner-redis, type: redis, property: connectionString }
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DJANGO_SETTINGS_MODULE
+        value: scanner.settings.staging
+      - key: ENVIRONMENT
+        value: staging
+      - key: SENTRY_DSN
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+
+  # ── STAGING Celery worker ───────────────────────────────────
+  - type: worker
+    name: posture-scanner-worker-staging
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: celery -A scanner worker --loglevel=info --chdir backend
+    branch: staging
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: posture-scanner-db, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: posture-scanner-redis, type: redis, property: connectionString }
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DJANGO_SETTINGS_MODULE
+        value: scanner.settings.staging
+      - key: SENTRY_DSN
+        sync: false
